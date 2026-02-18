@@ -105,7 +105,10 @@ class TradingAgentsGraph:
         self.tool_nodes = self._create_tool_nodes()
 
         # Initialize components
-        self.conditional_logic = ConditionalLogic()
+        self.conditional_logic = ConditionalLogic(
+            max_debate_rounds=self.config.get("max_debate_rounds", 1),
+            max_risk_discuss_rounds=self.config.get("max_risk_discuss_rounds", 1),
+        )
         self.graph_setup = GraphSetup(
             self.quick_thinking_llm,
             self.deep_thinking_llm,
@@ -118,7 +121,9 @@ class TradingAgentsGraph:
             self.conditional_logic,
         )
 
-        self.propagator = Propagator()
+        self.propagator = Propagator(
+            max_recur_limit=self.config.get("max_recur_limit", 200)
+        )
         self.reflector = Reflector(self.quick_thinking_llm)
         self.signal_processor = SignalProcessor(self.quick_thinking_llm)
 
@@ -184,13 +189,17 @@ class TradingAgentsGraph:
         }
 
     def propagate(self, company_name, trade_date):
-        """Run the trading agents graph for a company on a specific date."""
+        """Run the trading agents graph for a company on a specific date.
+        company_name: User input (ticker symbol, e.g. VRT). Resolved via Yahoo Finance to avoid wrong mapping (e.g. VRT -> Vertiv not Vertex).
+        """
+        from tradingagents.dataflows.y_finance import resolve_ticker_to_symbol_and_name
 
-        self.ticker = company_name
+        ticker, company_display_name = resolve_ticker_to_symbol_and_name(company_name)
+        self.ticker = ticker
 
-        # Initialize state
+        # Initialize state with canonical ticker and official company name from Yahoo
         init_agent_state = self.propagator.create_initial_state(
-            company_name, trade_date
+            ticker, trade_date, company_display_name=company_display_name
         )
         args = self.propagator.get_graph_args()
 
@@ -198,13 +207,12 @@ class TradingAgentsGraph:
             # Debug mode with tracing
             trace = []
             for chunk in self.graph.stream(init_agent_state, **args):
-                if len(chunk["messages"]) == 0:
-                    pass
-                else:
-                    chunk["messages"][-1].pretty_print()
+                messages = chunk.get("messages", [])
+                if len(messages) > 0:
+                    messages[-1].pretty_print()
                     trace.append(chunk)
 
-            final_state = trace[-1]
+            final_state = trace[-1] if trace else {}
         else:
             # Standard mode without tracing
             final_state = self.graph.invoke(init_agent_state, **args)
@@ -250,14 +258,13 @@ class TradingAgentsGraph:
             "final_trade_decision": final_state["final_trade_decision"],
         }
 
-        # Save to file
-        directory = Path(f"eval_results/{self.ticker}/TradingAgentsStrategy_logs/")
+        # Save to file under configured results directory
+        results_dir = self.config.get("results_dir", "./results")
+        directory = Path(results_dir) / self.ticker / "TradingAgentsStrategy_logs"
         directory.mkdir(parents=True, exist_ok=True)
 
-        with open(
-            f"eval_results/{self.ticker}/TradingAgentsStrategy_logs/full_states_log_{trade_date}.json",
-            "w",
-        ) as f:
+        log_path = directory / f"full_states_log_{trade_date}.json"
+        with open(log_path, "w") as f:
             json.dump(self.log_states_dict, f, indent=4)
 
     def reflect_and_remember(self, returns_losses):

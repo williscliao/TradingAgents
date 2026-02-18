@@ -462,7 +462,7 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
 def get_user_selections():
     """Get all user selections before starting the analysis display."""
     # Display ASCII art welcome message
-    with open("./cli/static/welcome.txt", "r") as f:
+    with open(Path(__file__).parent / "static" / "welcome.txt", "r") as f:
         welcome_ascii = f.read()
 
     # Create welcome box content
@@ -957,8 +957,8 @@ def run_analysis():
         @wraps(func)
         def wrapper(*args, **kwargs):
             func(*args, **kwargs)
-            timestamp, tool_name, args = obj.tool_calls[-1]
-            args_str = ", ".join(f"{k}={v}" for k, v in args.items())
+            timestamp, tool_name, tool_args = obj.tool_calls[-1]
+            args_str = ", ".join(f"{k}={v}" for k, v in tool_args.items())
             with open(log_file, "a") as f:
                 f.write(f"{timestamp} [Tool Call] {tool_name}({args_str})\n")
         return wrapper
@@ -1009,9 +1009,18 @@ def run_analysis():
         )
         update_display(layout, spinner_text, stats_handler=stats_handler, start_time=start_time)
 
+        # Resolve ticker to canonical symbol and company name (same as propagate())
+        from tradingagents.dataflows.y_finance import resolve_ticker_to_symbol_and_name
+        try:
+            resolved_ticker, company_display_name = resolve_ticker_to_symbol_and_name(selections["ticker"])
+        except ValueError:
+            resolved_ticker = selections["ticker"]
+            company_display_name = selections["ticker"]
+
         # Initialize state and get graph args with callbacks
         init_agent_state = graph.propagator.create_initial_state(
-            selections["ticker"], selections["analysis_date"]
+            resolved_ticker, selections["analysis_date"],
+            company_display_name=company_display_name,
         )
         # Pass callbacks to graph config for tool execution tracking
         # (LLM tracking is handled separately via LLM constructor)

@@ -5,13 +5,13 @@ import json
 def create_risk_manager(llm, memory):
     def risk_manager_node(state) -> dict:
 
-        company_name = state["company_of_interest"]
+        company_name = state.get("company_display_name") or state["company_of_interest"]
 
         history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
         market_research_report = state["market_report"]
         news_report = state["news_report"]
-        fundamentals_report = state["news_report"]
+        fundamentals_report = state["fundamentals_report"]
         sentiment_report = state["sentiment_report"]
         trader_plan = state["investment_plan"]
 

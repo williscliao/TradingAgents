@@ -1,0 +1,5 @@
+Based on the provided investment plan and my analysis, I align with the bearish outlook due to the prevailing downtrend, poor risk/reward at current levels, and the convergence of resistance factors. The primary trend remains downward, with price trading below the declining 200-day SMA, and the recent rally appears overextended, offering limited upside (~4% to $180) versus significant downside risk (~8% to $159). This mirrors past mistakes where short-term reversals failed at major trend resistance.  
+
+For existing positions, reducing exposure is prudent, while aggressive traders could consider shorting on a confirmed reversal signal. However, without a current position, the optimal action is to avoid buying and wait for either a breakdown or a confirmed breakout above the 200-day SMA.  
+
+**FINAL TRANSACTION PROPOSAL: SELL**

@@ -1,0 +1,5 @@
+Based on the provided investment plan and its detailed rationale, I am aligning with the bear case due to the confluence of observable technical breakdowns, fundamental catalysts, and structural vulnerabilities. The evidence of high-volume selling below key moving averages, coupled with scrutiny over AI spending and concentration risks, indicates significant near-term downside potential. My past tendency to default to a "hold" during such breakdowns has led to unnecessary drawdowns, so proactive risk management is warranted here.
+
+I recommend executing a partial sell-off to reduce exposure, reallocating into equal-weight tech to maintain sector participation while mitigating concentration risk, and setting a disciplined re-entry rule. This approach balances defensive action with strategic positioning.
+
+**FINAL TRANSACTION PROPOSAL: SELL**

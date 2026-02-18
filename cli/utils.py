@@ -160,6 +160,16 @@ def select_shallow_thinking_agent(provider) -> str:
             ("GPT-OSS:latest (20B, local)", "gpt-oss:latest"),
             ("GLM-4.7-Flash:latest (30B, local)", "glm-4.7-flash:latest"),
         ],
+        "deepseek": [
+            ("Deepseek Chat - 通用对话 (128K context)", "deepseek-chat"),
+            ("Deepseek Reasoner - 推理模式", "deepseek-reasoner"),
+        ],
+        "qwen": [
+            ("Qwen Turbo - 快速响应", "qwen-turbo"),
+            ("Qwen Plus - 平衡", "qwen-plus"),
+            ("Qwen Max - 最强能力", "qwen-max"),
+            ("Qwen Long - 长文本", "qwen-long"),
+        ],
     }
 
     choice = questionary.select(
@@ -228,6 +238,16 @@ def select_deep_thinking_agent(provider) -> str:
             ("GPT-OSS:latest (20B, local)", "gpt-oss:latest"),
             ("Qwen3:latest (8B, local)", "qwen3:latest"),
         ],
+        "deepseek": [
+            ("Deepseek Reasoner - 推理模式", "deepseek-reasoner"),
+            ("Deepseek Chat - 通用对话 (128K context)", "deepseek-chat"),
+        ],
+        "qwen": [
+            ("Qwen Max - 最强能力", "qwen-max"),
+            ("Qwen Plus - 平衡", "qwen-plus"),
+            ("Qwen Long - 长文本", "qwen-long"),
+            ("Qwen Turbo - 快速响应", "qwen-turbo"),
+        ],
     }
 
     choice = questionary.select(
@@ -260,6 +280,8 @@ def select_llm_provider() -> tuple[str, str]:
         ("Google", "https://generativelanguage.googleapis.com/v1"),
         ("Anthropic", "https://api.anthropic.com/"),
         ("xAI", "https://api.x.ai/v1"),
+        ("Deepseek", "https://api.deepseek.com/v1"),
+        ("Qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
         ("Openrouter", "https://openrouter.ai/api/v1"),
         ("Ollama", "http://localhost:11434/v1"),
     ]

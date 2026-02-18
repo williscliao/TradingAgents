@@ -1,10 +1,22 @@
 import os
+from pathlib import Path
 from typing import Any, Optional
 
 from langchain_openai import ChatOpenAI
 
 from .base_client import BaseLLMClient
 from .validators import validate_model
+
+
+def _ensure_dotenv_loaded() -> None:
+    """若 .env 尚未加载，从项目根再加载一次（兜底）。"""
+    try:
+        from dotenv import load_dotenv
+        # openai_client.py 在 tradingagents/llm_clients/ 下，项目根为 parent.parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
+        load_dotenv(project_root / ".env", override=True)
+    except Exception:
+        pass
 
 
 class UnifiedChatOpenAI(ChatOpenAI):
@@ -43,6 +55,7 @@ class OpenAIClient(BaseLLMClient):
 
     def get_llm(self) -> Any:
         """Return configured ChatOpenAI instance."""
+        _ensure_dotenv_loaded()
         llm_kwargs = {"model": self.model}
 
         if self.provider == "xai":
@@ -50,20 +63,43 @@ class OpenAIClient(BaseLLMClient):
             api_key = os.environ.get("XAI_API_KEY")
             if api_key:
                 llm_kwargs["api_key"] = api_key
+        elif self.provider == "deepseek":
+            llm_kwargs["base_url"] = self.base_url or "https://api.deepseek.com/v1"
+            api_key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+            if not api_key:
+                raise ValueError("DEEPSEEK_API_KEY 未设置或为空，请在 .env 中配置后重新运行")
+            llm_kwargs["api_key"] = api_key
+        elif self.provider == "qwen":
+            llm_kwargs["base_url"] = self.base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            api_key = (os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("QWEN_API_KEY") or "").strip()
+            if not api_key:
+                raise ValueError("DASHSCOPE_API_KEY 或 QWEN_API_KEY 未设置或为空，请在 .env 中配置后重新运行")
+            llm_kwargs["api_key"] = api_key
         elif self.provider == "openrouter":
             llm_kwargs["base_url"] = "https://openrouter.ai/api/v1"
-            api_key = os.environ.get("OPENROUTER_API_KEY")
-            if api_key:
-                llm_kwargs["api_key"] = api_key
+            api_key = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
+            if not api_key:
+                raise ValueError("OPENROUTER_API_KEY 未设置或为空，请在 .env 中配置后重新运行")
+            llm_kwargs["api_key"] = api_key
         elif self.provider == "ollama":
             llm_kwargs["base_url"] = "http://localhost:11434/v1"
             llm_kwargs["api_key"] = "ollama"  # Ollama doesn't require auth
+        elif self.provider == "openai":
+            api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+            if not api_key:
+                raise ValueError("OPENAI_API_KEY 未设置或为空，请在 .env 中配置后重新运行")
+            llm_kwargs["api_key"] = api_key
+            if self.base_url:
+                llm_kwargs["base_url"] = self.base_url
         elif self.base_url:
             llm_kwargs["base_url"] = self.base_url
 
-        for key in ("timeout", "max_retries", "reasoning_effort", "api_key", "callbacks"):
+        for key in ("timeout", "max_retries", "reasoning_effort", "callbacks"):
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
+        # 不要用 kwargs 覆盖 api_key，避免空值覆盖已设置好的 key
+        if "api_key" in self.kwargs and (self.kwargs.get("api_key") or "").strip():
+            llm_kwargs["api_key"] = (self.kwargs["api_key"] or "").strip()
 
         return UnifiedChatOpenAI(**llm_kwargs)
 

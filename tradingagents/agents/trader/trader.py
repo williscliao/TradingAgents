@@ -5,7 +5,7 @@ import json
 
 def create_trader(llm, memory):
     def trader_node(state, name):
-        company_name = state["company_of_interest"]
+        company_name = state.get("company_display_name") or state["company_of_interest"]
         investment_plan = state["investment_plan"]
         market_research_report = state["market_report"]
         sentiment_report = state["sentiment_report"]

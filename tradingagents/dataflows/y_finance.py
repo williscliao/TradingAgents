@@ -5,6 +5,40 @@ import yfinance as yf
 import os
 from .stockstats_utils import StockstatsUtils
 
+
+def resolve_ticker_to_symbol_and_name(ticker: str) -> tuple[str, str]:
+    """用 Yahoo Finance 将用户输入的 ticker 解析为规范 symbol 与官方公司名。
+    严格以用户输入为准：若 Yahoo 返回的 symbol 与输入不一致（如 VRT 被误解析为 VRTX），
+    则报错拒绝使用，避免分析错公司。
+
+    Returns:
+        (symbol, company_long_name)：与用户输入一致的交易代码 + Yahoo 上的正式公司名称。
+    Raises:
+        ValueError: 无法找到数据、数据无效、或 Yahoo 返回的代码与输入不一致时。
+    """
+    raw = (ticker or "").strip().upper()
+    if not raw:
+        raise ValueError("请输入股票代码（ticker）。")
+    t = yf.Ticker(raw)
+    info = t.info
+    if not info or not isinstance(info, dict):
+        raise ValueError(
+            f"在 Yahoo Finance 未找到代码 '{raw}' 的数据，请核对是否为有效交易代码（如 VRT、AAPL）。"
+        )
+    yahoo_symbol = (info.get("symbol") or "").upper().strip()
+    # 关键：Yahoo 有时会把 VRT 解析成 VRTX，若不一致则绝不采纳 Yahoo 的 symbol/公司名，只用用户输入
+    if yahoo_symbol and yahoo_symbol != raw:
+        # 仍用用户输入的 raw 作为 symbol，避免下游拿到 VRTX；公司名不信任 Yahoo，只用 ticker 展示
+        return (raw, raw)
+    long_name = info.get("longName") or info.get("shortName") or raw
+    if not long_name or not str(long_name).strip():
+        raise ValueError(
+            f"代码 '{raw}' 在 Yahoo Finance 无有效公司名称，请核对代码。"
+        )
+    # 始终以用户输入为 symbol，仅在 Yahoo 返回一致时才用其公司名
+    return (raw, str(long_name).strip())
+
+
 def get_YFin_data_online(
     symbol: Annotated[str, "ticker symbol of the company"],
     start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
