@@ -1,5 +1,6 @@
 import time
 import json
+from tradingagents.agents.utils.agent_utils import truncate_content
 
 
 def create_research_manager(llm, memory):
@@ -9,31 +10,54 @@ def create_research_manager(llm, memory):
         sentiment_report = state["sentiment_report"]
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
+        industry_report = state.get("industry_report", "")
+
 
         investment_debate_state = state["investment_debate_state"]
 
-        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
+        # Truncate history to keep context window manageable
+        history = truncate_content(history, 12000)
+
+        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}\n\n{industry_report}"
         past_memories = memory.get_memories(curr_situation, n_matches=2)
 
         past_memory_str = ""
         for i, rec in enumerate(past_memories, 1):
             past_memory_str += rec["recommendation"] + "\n\n"
 
-        prompt = f"""As the portfolio manager and debate facilitator, your role is to critically evaluate this round of debate and make a definitive decision: align with the bear analyst, the bull analyst, or choose Hold only if it is strongly justified based on the arguments presented.
+        prompt = f"""As the Portfolio Manager and Debate Facilitator, your role is to critically evaluate this round of debate and make a definitive decision: align with the bear analyst, the bull analyst, or choose Hold only if strongly justified.
 
-Summarize the key points from both sides concisely, focusing on the most compelling evidence or reasoning. Your recommendation—Buy, Sell, or Hold—must be clear and actionable. Avoid defaulting to Hold simply because both sides have valid points; commit to a stance grounded in the debate's strongest arguments.
+To ensure the highest quality judgment, your response MUST be structured into the following distinct sections:
 
-Additionally, develop a detailed investment plan for the trader. This should include:
+### 1. Fact-Check & Logical Flaws
+(Critically evaluate the arguments presented by both the Bull and Bear analysts. Check if their claims are supported by the provided data in the Market and Fundamentals reports. explicitly point out any logical flaws, over-optimistic assumptions, or ignored risks in their arguments.)
 
-Your Recommendation: A decisive stance supported by the most convincing arguments.
-Rationale: An explanation of why these arguments lead to your conclusion.
-Strategic Actions: Concrete steps for implementing the recommendation.
-Take into account your past mistakes on similar situations. Use these insights to refine your decision-making and ensure you are learning and improving. Present your analysis conversationally, as if speaking naturally, without special formatting. 
+### 2. Scenario & Weighting Analysis
+(Synthesize the current macroeconomic environment and news landscape. Discuss which analyst's argument carries more weight given the current market conditions. For example, if interest rates are rising, justify why balance sheet risks highlighted by the Bear should be weighted more heavily than growth projections by the Bull.)
+
+### 3. Final Decision & Execution Plan
+(Based on your rigorous analysis above, provide a clear, actionable recommendation: BUY, SELL, or HOLD. Provide concrete strategic actions for the trader, including position sizing and risk management.)
+
+Take into account your past mistakes on similar situations. Use these insights to refine your decision-making and ensure you are learning and improving.
 
 Here are your past reflections on mistakes:
-\"{past_memory_str}\"
+"{past_memory_str}"
 
-Here is the debate:
+Here is the supporting data:
+Market research report:
+{market_research_report}
+
+Fundamentals report:
+{fundamentals_report}
+
+Recent News:
+{news_report}
+
+Sentiment & Industry:
+{sentiment_report}
+{industry_report}
+
+Here is the debate you need to judge:
 Debate History:
 {history}"""
         response = llm.invoke(prompt)

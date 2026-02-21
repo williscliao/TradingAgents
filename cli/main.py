@@ -1,5 +1,6 @@
 from typing import Optional
 import datetime
+import os
 import typer
 from pathlib import Path
 from functools import wraps
@@ -22,11 +23,13 @@ from rich.tree import Tree
 from rich import box
 from rich.align import Align
 from rich.rule import Rule
+import threading
 
 from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.default_config import DEFAULT_CONFIG, DEPTH_PRESETS
 from cli.models import AnalystType
 from cli.utils import *
+from cli.utils import select_single_analyst
 from cli.announcements import fetch_announcements, display_announcements
 from cli.stats_handler import StatsCallbackHandler
 
@@ -55,6 +58,8 @@ class MessageBuffer:
         "social": "Social Analyst",
         "news": "News Analyst",
         "fundamentals": "Fundamentals Analyst",
+        "industry": "Industry Analyst",
+        "valuation": "Valuation Analyst",
     }
 
     # Report section mapping: section -> (analyst_key for filtering, finalizing_agent)
@@ -65,6 +70,8 @@ class MessageBuffer:
         "sentiment_report": ("social", "Social Analyst"),
         "news_report": ("news", "News Analyst"),
         "fundamentals_report": ("fundamentals", "Fundamentals Analyst"),
+        "industry_report": ("industry", "Industry Analyst"),
+        "valuation_report": ("valuation", "Valuation Analyst"),
         "investment_plan": (None, "Research Manager"),
         "trader_investment_plan": (None, "Trader"),
         "final_trade_decision": (None, "Portfolio Manager"),
@@ -80,6 +87,7 @@ class MessageBuffer:
         self.report_sections = {}
         self.selected_analysts = []
         self._last_message_id = None
+        self._lock = threading.Lock()
 
     def init_for_analysis(self, selected_analysts):
         """Initialize agent status and report sections based on selected analysts.
@@ -146,14 +154,16 @@ class MessageBuffer:
         self.tool_calls.append((timestamp, tool_name, args))
 
     def update_agent_status(self, agent, status):
-        if agent in self.agent_status:
-            self.agent_status[agent] = status
-            self.current_agent = agent
+        with self._lock:
+            if agent in self.agent_status:
+                self.agent_status[agent] = status
+                self.current_agent = agent
 
     def update_report_section(self, section_name, content):
-        if section_name in self.report_sections:
-            self.report_sections[section_name] = content
-            self._update_current_report()
+        with self._lock:
+            if section_name in self.report_sections:
+                self.report_sections[section_name] = content
+                self._update_current_report()
 
     def _update_current_report(self):
         # For the panel display, only show the most recently updated section
@@ -173,6 +183,8 @@ class MessageBuffer:
                 "sentiment_report": "Social Sentiment",
                 "news_report": "News Analysis",
                 "fundamentals_report": "Fundamentals Analysis",
+                "industry_report": "Industry Analysis",
+                "valuation_report": "Valuation Analysis",
                 "investment_plan": "Research Team Decision",
                 "trader_investment_plan": "Trading Team Plan",
                 "final_trade_decision": "Portfolio Management Decision",
@@ -188,25 +200,20 @@ class MessageBuffer:
         report_parts = []
 
         # Analyst Team Reports - use .get() to handle missing sections
-        analyst_sections = ["market_report", "sentiment_report", "news_report", "fundamentals_report"]
+        analyst_sections = {
+            "market_report": "Market Analysis",
+            "sentiment_report": "Social Sentiment",
+            "news_report": "News Analysis",
+            "fundamentals_report": "Fundamentals Analysis",
+            "industry_report": "Industry Analysis",
+            "valuation_report": "Valuation Analysis"
+        }
+        
         if any(self.report_sections.get(section) for section in analyst_sections):
             report_parts.append("## Analyst Team Reports")
-            if self.report_sections.get("market_report"):
-                report_parts.append(
-                    f"### Market Analysis\n{self.report_sections['market_report']}"
-                )
-            if self.report_sections.get("sentiment_report"):
-                report_parts.append(
-                    f"### Social Sentiment\n{self.report_sections['sentiment_report']}"
-                )
-            if self.report_sections.get("news_report"):
-                report_parts.append(
-                    f"### News Analysis\n{self.report_sections['news_report']}"
-                )
-            if self.report_sections.get("fundamentals_report"):
-                report_parts.append(
-                    f"### Fundamentals Analysis\n{self.report_sections['fundamentals_report']}"
-                )
+            for section, title in analyst_sections.items():
+                if self.report_sections.get(section):
+                    report_parts.append(f"### {title}\n{self.report_sections[section]}")
 
         # Research Team Reports
         if self.report_sections.get("investment_plan"):
@@ -237,7 +244,7 @@ def create_layout():
         Layout(name="footer", size=3),
     )
     layout["main"].split_column(
-        Layout(name="upper", ratio=3), Layout(name="analysis", ratio=5)
+        Layout(name="upper", ratio=1), Layout(name="analysis", ratio=1)
     )
     layout["upper"].split_row(
         Layout(name="progress", ratio=2), Layout(name="messages", ratio=3)
@@ -286,6 +293,7 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
             "Social Analyst",
             "News Analyst",
             "Fundamentals Analyst",
+            "Valuation Analyst",
         ],
         "Research Team": ["Bull Researcher", "Bear Researcher", "Research Manager"],
         "Trading Team": ["Trader"],
@@ -459,6 +467,16 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
     layout["footer"].update(Panel(stats_table, border_style="grey50"))
 
 
+
+# Create a boxed questionnaire for each step (Module Level Helper)
+def create_question_box(title, prompt, default=None):
+    box_content = f"[bold]{title}[/bold]\n"
+    box_content += f"[dim]{prompt}[/dim]"
+    if default:
+        box_content += f"\n[dim]Default: {default}[/dim]"
+    return Panel(box_content, border_style="blue", padding=(1, 2))
+
+
 def get_user_selections():
     """Get all user selections before starting the analysis display."""
     # Display ASCII art welcome message
@@ -470,9 +488,6 @@ def get_user_selections():
     welcome_content += "[bold green]TradingAgents: Multi-Agents LLM Financial Trading Framework - CLI[/bold green]\n\n"
     welcome_content += "[bold]Workflow Steps:[/bold]\n"
     welcome_content += "I. Analyst Team → II. Research Team → III. Trader → IV. Risk Management → V. Portfolio Management\n\n"
-    welcome_content += (
-        "[dim]Built by [Tauric Research](https://github.com/TauricResearch)[/dim]"
-    )
 
     # Create and center the welcome box
     welcome_box = Panel(
@@ -487,16 +502,10 @@ def get_user_selections():
     console.print()  # Add vertical space before announcements
 
     # Fetch and display announcements (silent on failure)
-    announcements = fetch_announcements()
-    display_announcements(console, announcements)
+    # announcements = fetch_announcements()
+    # display_announcements(console, announcements)
 
-    # Create a boxed questionnaire for each step
-    def create_question_box(title, prompt, default=None):
-        box_content = f"[bold]{title}[/bold]\n"
-        box_content += f"[dim]{prompt}[/dim]"
-        if default:
-            box_content += f"\n[dim]Default: {default}[/dim]"
-        return Panel(box_content, border_style="blue", padding=(1, 2))
+
 
     # Step 1: Ticker symbol
     console.print(
@@ -517,43 +526,41 @@ def get_user_selections():
     )
     analysis_date = get_analysis_date()
 
-    # Step 3: Select analysts
-    console.print(
-        create_question_box(
-            "Step 3: Analysts Team", "Select your LLM analyst agents for the analysis"
-        )
-    )
-    selected_analysts = select_analysts()
-    console.print(
-        f"[green]Selected analysts:[/green] {', '.join(analyst.value for analyst in selected_analysts)}"
-    )
 
-    # Step 4: Research depth
+    # Step 3: Research depth
     console.print(
         create_question_box(
-            "Step 4: Research Depth", "Select your research depth level"
+            "Step 3: Research Depth", "Select your research depth level"
         )
     )
     selected_research_depth = select_research_depth()
+    
+    selected_standalone_analyst = None
+    if selected_research_depth == "standalone":
+        console.print(
+            create_question_box(
+                "Step 3b: Select Single Agent", "Choose the specific analyst to run"
+            )
+        )
+        selected_standalone_analyst = select_single_analyst()
 
-    # Step 5: OpenAI backend
+    # Step 4: LLM provider
     console.print(
         create_question_box(
-            "Step 5: OpenAI backend", "Select which service to talk to"
+            "Step 4: LLM Provider", "Select which service to talk to"
         )
     )
     selected_llm_provider, backend_url = select_llm_provider()
-    
-    # Step 6: Thinking agents
+    # Step 5: Thinking agents
     console.print(
         create_question_box(
-            "Step 6: Thinking Agents", "Select your thinking agents for analysis"
+            "Step 5: Thinking Agents", "Select your thinking agents for analysis"
         )
     )
     selected_shallow_thinker = select_shallow_thinking_agent(selected_llm_provider)
     selected_deep_thinker = select_deep_thinking_agent(selected_llm_provider)
 
-    # Step 7: Provider-specific thinking configuration
+    # Step 6: Provider-specific thinking configuration
     thinking_level = None
     reasoning_effort = None
 
@@ -561,7 +568,7 @@ def get_user_selections():
     if provider_lower == "google":
         console.print(
             create_question_box(
-                "Step 7: Thinking Mode",
+                "Step 6: Thinking Mode",
                 "Configure Gemini thinking mode"
             )
         )
@@ -569,7 +576,7 @@ def get_user_selections():
     elif provider_lower == "openai":
         console.print(
             create_question_box(
-                "Step 7: Reasoning Effort",
+                "Step 6: Reasoning Effort",
                 "Configure OpenAI reasoning effort level"
             )
         )
@@ -578,8 +585,9 @@ def get_user_selections():
     return {
         "ticker": selected_ticker,
         "analysis_date": analysis_date,
-        "analysts": selected_analysts,
+        # "report_language": selected_language,  # Moved to end of analysis
         "research_depth": selected_research_depth,
+        "standalone_analyst": selected_standalone_analyst,
         "llm_provider": selected_llm_provider.lower(),
         "backend_url": backend_url,
         "shallow_thinker": selected_shallow_thinker,
@@ -621,22 +629,22 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
     # 1. Analysts
     analysts_dir = save_path / "1_analysts"
     analyst_parts = []
-    if final_state.get("market_report"):
+    analyst_sections = {
+        "market_report": ("Market Analyst", "market.md"),
+        "sentiment_report": ("Social Analyst", "sentiment.md"),
+        "news_report": ("News Analyst", "news.md"),
+        "fundamentals_report": ("Fundamentals Analyst", "fundamentals.md"),
+        "industry_report": ("Industry Analyst", "industry.md"),
+        "valuation_report": ("Valuation Analyst", "valuation.md")
+    }
+
+    if any(final_state.get(section) for section in analyst_sections):
         analysts_dir.mkdir(exist_ok=True)
-        (analysts_dir / "market.md").write_text(final_state["market_report"])
-        analyst_parts.append(("Market Analyst", final_state["market_report"]))
-    if final_state.get("sentiment_report"):
-        analysts_dir.mkdir(exist_ok=True)
-        (analysts_dir / "sentiment.md").write_text(final_state["sentiment_report"])
-        analyst_parts.append(("Social Analyst", final_state["sentiment_report"]))
-    if final_state.get("news_report"):
-        analysts_dir.mkdir(exist_ok=True)
-        (analysts_dir / "news.md").write_text(final_state["news_report"])
-        analyst_parts.append(("News Analyst", final_state["news_report"]))
-    if final_state.get("fundamentals_report"):
-        analysts_dir.mkdir(exist_ok=True)
-        (analysts_dir / "fundamentals.md").write_text(final_state["fundamentals_report"])
-        analyst_parts.append(("Fundamentals Analyst", final_state["fundamentals_report"]))
+        for section, (title, filename) in analyst_sections.items():
+            if final_state.get(section):
+                (analysts_dir / filename).write_text(final_state[section])
+                analyst_parts.append((title, final_state[section]))
+
     if analyst_parts:
         content = "\n\n".join(f"### {name}\n{text}" for name, text in analyst_parts)
         sections.append(f"## I. Analyst Team Reports\n\n{content}")
@@ -710,14 +718,19 @@ def display_complete_report(final_state):
 
     # I. Analyst Team Reports
     analysts = []
-    if final_state.get("market_report"):
-        analysts.append(("Market Analyst", final_state["market_report"]))
-    if final_state.get("sentiment_report"):
-        analysts.append(("Social Analyst", final_state["sentiment_report"]))
-    if final_state.get("news_report"):
-        analysts.append(("News Analyst", final_state["news_report"]))
-    if final_state.get("fundamentals_report"):
-        analysts.append(("Fundamentals Analyst", final_state["fundamentals_report"]))
+    analyst_sections = {
+        "market_report": "Market Analyst",
+        "sentiment_report": "Social Analyst",
+        "news_report": "News Analyst",
+        "fundamentals_report": "Fundamentals Analyst",
+        "industry_report": "Industry Analyst",
+        "valuation_report": "Valuation Analyst"
+    }
+
+    for section, title in analyst_sections.items():
+        if final_state.get(section):
+            analysts.append((title, final_state[section]))
+
     if analysts:
         console.print(Panel("[bold]I. Analyst Team Reports[/bold]", border_style="cyan"))
         for title, content in analysts:
@@ -772,18 +785,22 @@ def update_research_team_status(status):
 
 
 # Ordered list of analysts for status transitions
-ANALYST_ORDER = ["market", "social", "news", "fundamentals"]
+ANALYST_ORDER = ["market", "fundamentals", "news", "social", "valuation", "industry"]
 ANALYST_AGENT_NAMES = {
     "market": "Market Analyst",
     "social": "Social Analyst",
     "news": "News Analyst",
     "fundamentals": "Fundamentals Analyst",
+    "industry": "Industry Analyst",
+    "valuation": "Valuation Analyst",
 }
 ANALYST_REPORT_MAP = {
     "market": "market_report",
     "social": "sentiment_report",
     "news": "news_report",
     "fundamentals": "fundamentals_report",
+    "industry": "industry_report",
+    "valuation": "valuation_report",
 }
 
 
@@ -810,6 +827,9 @@ def update_analyst_statuses(message_buffer, chunk):
         if has_report:
             message_buffer.update_agent_status(agent_name, "completed")
             message_buffer.update_report_section(report_key, chunk[report_key])
+        elif message_buffer.agent_status.get(agent_name) == "completed":
+            # Keep completed status if we already have it
+            continue
         elif not found_active:
             message_buffer.update_agent_status(agent_name, "in_progress")
             found_active = True
@@ -896,18 +916,108 @@ def format_tool_args(args, max_length=80) -> str:
         return result[:max_length - 3] + "..."
     return result
 
+# Translation logic uses the configured shallow_thinker model.
+
+_TRANSLATE_PROMPT = (
+    "You are a professional financial translator. "
+    "Translate the following English financial analysis report into fluent, professional Simplified Chinese (简体中文). "
+    "Keep all numbers, ticker symbols, dates, and technical terms (e.g. RSI, MACD, PE ratio) unchanged. "
+    "Preserve the original markdown formatting (headers, bold, lists, tables). "
+    "Do NOT add any commentary or explanation — output ONLY the translated text.\n\n"
+    "--- BEGIN TEXT ---\n{text}\n--- END TEXT ---"
+)
+
+
+def translate_final_state(final_state: dict, config: dict) -> dict:
+    """Translate all text report sections in final_state to Chinese.
+
+    Uses a cheap/fast model from the user's configured provider.
+    Returns a new dict with translated content (original is not mutated).
+    """
+    from tradingagents.llm_clients import create_llm_client
+
+    provider = config.get("llm_provider", "openai")
+    translate_model = config.get("quick_think_llm")
+    backend_url = config.get("backend_url", "https://api.openai.com/v1")
+
+    translate_llm = create_llm_client(
+        provider=provider,
+        model=translate_model,
+        base_url=backend_url,
+    ).get_llm()
+
+    def _translate(text: str) -> str:
+        """Translate a single chunk of text."""
+        if not text or not text.strip():
+            return text
+        response = translate_llm.invoke(_TRANSLATE_PROMPT.format(text=text))
+        return response.content
+
+    # Deep-copy to avoid mutating the original
+    import copy
+    state = copy.deepcopy(final_state)
+
+    # Translate top-level report fields
+    text_keys = [
+        "market_report", "sentiment_report", "news_report",
+        "fundamentals_report", "industry_report", "valuation_report",
+        "trader_investment_plan", "final_trade_decision",
+    ]
+    for key in text_keys:
+        if state.get(key) and isinstance(state[key], str) and state[key].strip():
+            console.print(f"  [dim]Translating {key}...[/dim]")
+            state[key] = _translate(state[key])
+
+    # Translate nested debate states
+    for debate_key in ("investment_debate_state", "risk_debate_state"):
+        if state.get(debate_key) and isinstance(state[debate_key], dict):
+            debate = state[debate_key]
+            history_keys = [
+                "bull_history", "bear_history", "judge_decision",
+                "aggressive_history", "conservative_history", "neutral_history",
+            ]
+            for hk in history_keys:
+                if debate.get(hk) and isinstance(debate[hk], str) and debate[hk].strip():
+                    console.print(f"  [dim]Translating {debate_key}.{hk}...[/dim]")
+                    debate[hk] = _translate(debate[hk])
+
+    return state
+
+
 def run_analysis():
     # First get all user selections
     selections = get_user_selections()
-
-    # Create config with selected research depth
+    
+    # Create config with depth preset applied
     config = DEFAULT_CONFIG.copy()
-    config["max_debate_rounds"] = selections["research_depth"]
-    config["max_risk_discuss_rounds"] = selections["research_depth"]
+
+    # ── Apply depth preset ──────────────────────────────────────────
+    depth = selections["research_depth"]  # "quick" | "standard" | "deep" | "standalone"
+    
+    if depth == "standalone":
+        # In standalone mode, use the single selected analyst
+        config["analysis_depth"] = "standalone"
+        config["max_debate_rounds"] = 0
+        config["max_risk_discuss_rounds"] = 0
+        # selections["standalone_analyst"] is likely an Enum member, get its value
+        analyst_value = selections["standalone_analyst"].value if hasattr(selections["standalone_analyst"], "value") else selections["standalone_analyst"]
+        preset = {"analysts": [analyst_value], "use_av_sentiment_news": True} 
+        # We enable AV sentiment news if the user picked a mode that supports it, or just default to True for standalone to be safe/powerful
+    else:
+        preset = DEPTH_PRESETS[depth]
+        config["analysis_depth"] = depth
+        config["max_debate_rounds"] = preset["max_debate_rounds"]
+        config["max_risk_discuss_rounds"] = preset["max_risk_discuss_rounds"]
+
+    # In deep mode (or standalone), switch news vendor to Alpha Vantage
+    if preset.get("use_av_sentiment_news"):
+        config["data_vendors"] = {**config["data_vendors"], "news_data": "alpha_vantage"}
+
     config["quick_think_llm"] = selections["shallow_thinker"]
     config["deep_think_llm"] = selections["deep_thinker"]
     config["backend_url"] = selections["backend_url"]
     config["llm_provider"] = selections["llm_provider"].lower()
+    # config["translator_model"] is now set lazily during post-analysis if needed
     # Provider-specific thinking configuration
     config["google_thinking_level"] = selections.get("google_thinking_level")
     config["openai_reasoning_effort"] = selections.get("openai_reasoning_effort")
@@ -915,20 +1025,12 @@ def run_analysis():
     # Create stats callback handler for tracking LLM/tool calls
     stats_handler = StatsCallbackHandler()
 
-    # Normalize analyst selection to predefined order (selection is a 'set', order is fixed)
-    selected_set = {analyst.value for analyst in selections["analysts"]}
-    selected_analyst_keys = [a for a in ANALYST_ORDER if a in selected_set]
-
-    # Initialize the graph with callbacks bound to LLMs
-    graph = TradingAgentsGraph(
-        selected_analyst_keys,
-        config=config,
-        debug=True,
-        callbacks=[stats_handler],
-    )
+    # ── Determine analysts from depth preset ──
+    selected_analyst_keys = [a for a in preset["analysts"]]
 
     # Initialize message buffer with selected analysts
     message_buffer.init_for_analysis(selected_analyst_keys)
+
 
     # Track start time for elapsed display
     start_time = time.time()
@@ -994,12 +1096,12 @@ def run_analysis():
         )
         message_buffer.add_message(
             "System",
-            f"Selected analysts: {', '.join(analyst.value for analyst in selections['analysts'])}",
+            f"Analysts: {', '.join(selected_analyst_keys)}",
         )
         update_display(layout, stats_handler=stats_handler, start_time=start_time)
 
         # Update agent status to in_progress for the first analyst
-        first_analyst = f"{selections['analysts'][0].value.capitalize()} Analyst"
+        first_analyst = f"{selected_analyst_keys[0].capitalize()} Analyst"
         message_buffer.update_agent_status(first_analyst, "in_progress")
         update_display(layout, stats_handler=stats_handler, start_time=start_time)
 
@@ -1007,6 +1109,21 @@ def run_analysis():
         spinner_text = (
             f"Analyzing {selections['ticker']} on {selections['analysis_date']}..."
         )
+
+        # Initialize the graph with callbacks bound to LLMs
+        # We define progress_callback here so it can access layout and spinner_text
+        def progress_callback(msg_type, content):
+            message_buffer.add_message(msg_type, content)
+            update_display(layout, spinner_text, stats_handler=stats_handler, start_time=start_time)
+
+        graph = TradingAgentsGraph(
+            selected_analyst_keys,
+            config=config,
+            debug=True,
+            callbacks=[stats_handler],
+            progress_callback=progress_callback,
+        )
+
         update_display(layout, spinner_text, stats_handler=stats_handler, start_time=start_time)
 
         # Resolve ticker to canonical symbol and company name (same as propagate())
@@ -1133,7 +1250,8 @@ def run_analysis():
 
         # Get final state and decision
         final_state = trace[-1]
-        decision = graph.process_signal(final_state["final_trade_decision"])
+        decision_raw = final_state.get("final_trade_decision")
+        decision = graph.process_signal(decision_raw) if decision_raw else None
 
         # Update all agent statuses to completed
         for agent in message_buffer.agent_status:
@@ -1153,11 +1271,26 @@ def run_analysis():
     # Post-analysis prompts (outside Live context for clean interaction)
     console.print("\n[bold cyan]Analysis Complete![/bold cyan]\n")
 
+    # ── Translate if Chinese was selected ────────────────────────────
+    
+    # Prompt for language selection at the end
+    console.print()
+    selected_language = select_report_language()
+    selections["report_language"] = selected_language
+
+    if selections.get("report_language") == "zh":
+        console.print(f"[yellow]正在使用 {config.get('quick_think_llm')} 翻译报告为中文...[/yellow]")
+        try:
+            final_state = translate_final_state(final_state, config)
+            console.print("[green]✓ 翻译完成[/green]\n")
+        except Exception as e:
+            console.print(f"[red]翻译失败 (报告保持英文): {e}[/red]\n")
+
     # Prompt to save report
     save_choice = typer.prompt("Save report?", default="Y").strip().upper()
     if save_choice in ("Y", "YES", ""):
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_path = Path.cwd() / "reports" / f"{selections['ticker']}_{timestamp}"
+        default_path = Path.cwd() / "reports" / f"{selections['ticker']}_{selections['research_depth']}_{timestamp}"
         save_path_str = typer.prompt(
             "Save path (press Enter for default)",
             default=str(default_path)
@@ -1167,6 +1300,23 @@ def run_analysis():
             report_file = save_report_to_disk(final_state, selections["ticker"], save_path)
             console.print(f"\n[green]✓ Report saved to:[/green] {save_path.resolve()}")
             console.print(f"  [dim]Complete report:[/dim] {report_file.name}")
+
+            # ── Auto-export to Google Drive ─────────────────────────────
+            gdrive_root = os.environ.get("GOOGLE_DRIVE_REPORT_PATH", "").strip()
+            if gdrive_root:
+                import shutil
+                gdrive_root = os.path.expanduser(gdrive_root)
+                gdrive_dest = Path(gdrive_root) / save_path.name
+                try:
+                    os.makedirs(gdrive_root, exist_ok=True)
+                    if gdrive_dest.exists():
+                        shutil.rmtree(gdrive_dest)
+                    shutil.copytree(save_path, gdrive_dest)
+                    console.print(f"[green]✓ Synced to Google Drive:[/green] {gdrive_dest}")
+                except Exception as e:
+                    console.print(f"[yellow]⚠ Google Drive sync failed: {e}[/yellow]")
+            # ────────────────────────────────────────────────────────────
+
         except Exception as e:
             console.print(f"[red]Error saving report: {e}[/red]")
 

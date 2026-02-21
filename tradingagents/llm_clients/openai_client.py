@@ -32,6 +32,8 @@ class UnifiedChatOpenAI(ChatOpenAI):
     @staticmethod
     def _is_reasoning_model(model: str) -> bool:
         """Check if model is a reasoning model that doesn't support temperature."""
+        if not model:
+            return False
         model_lower = model.lower()
         return (
             model_lower.startswith("o1")

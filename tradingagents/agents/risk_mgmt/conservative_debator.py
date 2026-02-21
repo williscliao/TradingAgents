@@ -16,6 +16,9 @@ def create_conservative_debator(llm):
         sentiment_report = state["sentiment_report"]
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
+        industry_report = state.get("industry_report", "")
+
+        risk_metrics = state.get("risk_metrics_report", "")
 
         trader_decision = state["trader_investment_plan"]
 
@@ -29,6 +32,16 @@ Market Research Report: {market_research_report}
 Social Media Sentiment Report: {sentiment_report}
 Latest World Affairs Report: {news_report}
 Company Fundamentals Report: {fundamentals_report}
+Industry & Competitive Landscape Report: {industry_report}
+Quantitative Risk Metrics: {risk_metrics}
+
+IMPORTANT: When using the Quantitative Risk Metrics, focus on aspects that SUPPORT conservative positioning:
+- Cite the specific VaR dollar amount at 99% confidence to quantify worst-case daily loss
+- If max drawdown is large (>20%), emphasize the real capital destruction risk
+- If Sharpe ratio < 1.0, argue that returns don't justify the risk taken
+- If current drawdown is significant, argue this is not the time to add risk
+- Use CVaR (Expected Shortfall) to show that tail risk is even worse than VaR suggests
+
 Here is the current conversation history: {history} Here is the last response from the aggressive analyst: {current_aggressive_response} Here is the last response from the neutral analyst: {current_neutral_response}. If there are no responses from the other viewpoints, do not hallucinate and just present your point.
 
 Engage by questioning their optimism and emphasizing the potential downsides they may have overlooked. Address each of their counterpoints to showcase why a conservative stance is ultimately the safest path for the firm's assets. Focus on debating and critiquing their arguments to demonstrate the strength of a low-risk strategy over their approaches. Output conversationally as if you are speaking without any special formatting."""

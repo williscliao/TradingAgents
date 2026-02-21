@@ -1,32 +1,35 @@
 # TradingAgents/graph/setup.py
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph, START
 from langgraph.prebuilt import ToolNode
 
 from tradingagents.agents import *
+from tradingagents.agents.risk_mgmt.risk_metrics_node import create_risk_metrics_node
 from tradingagents.agents.utils.agent_states import AgentState
 
 from .conditional_logic import ConditionalLogic
+import logging
 
+logger = logging.getLogger(__name__)
 
 class GraphSetup:
-    """Handles the setup and configuration of the agent graph."""
+    """Configures the TradingAgentsGraph structure and node connections."""
 
     def __init__(
         self,
         quick_thinking_llm: ChatOpenAI,
         deep_thinking_llm: ChatOpenAI,
         tool_nodes: Dict[str, ToolNode],
-        bull_memory,
-        bear_memory,
-        trader_memory,
-        invest_judge_memory,
-        risk_manager_memory,
-        conditional_logic: ConditionalLogic,
+        bull_memory=None,
+        bear_memory=None,
+        trader_memory=None,
+        invest_judge_memory=None,
+        risk_manager_memory=None,
+        conditional_logic: Optional[ConditionalLogic] = None,
+        progress_callback: Optional[Any] = None,
     ):
-        """Initialize with required components."""
         self.quick_thinking_llm = quick_thinking_llm
         self.deep_thinking_llm = deep_thinking_llm
         self.tool_nodes = tool_nodes
@@ -36,54 +39,147 @@ class GraphSetup:
         self.invest_judge_memory = invest_judge_memory
         self.risk_manager_memory = risk_manager_memory
         self.conditional_logic = conditional_logic
+        self.progress_callback = progress_callback
 
-    def setup_graph(
-        self, selected_analysts=["market", "social", "news", "fundamentals"]
-    ):
-        """Set up and compile the agent workflow graph.
+    def build_analyst_subgraph(self, node, tools, delete, condition, mapping):
+        """Builds a standardized subgraph for an individual analyst."""
+        subgraph = StateGraph(AgentState)
+        subgraph.add_node("Analyst", node)
+        subgraph.add_node("Tools", tools)
+        subgraph.add_node("MsgClear", delete)
 
-        Args:
-            selected_analysts (list): List of analyst types to include. Options are:
-                - "market": Market analyst
-                - "social": Social media analyst
-                - "news": News analyst
-                - "fundamentals": Fundamentals analyst
-        """
-        if len(selected_analysts) == 0:
-            raise ValueError("Trading Agents Graph Setup Error: no analysts selected!")
+        subgraph.add_edge(START, "Analyst")
+        subgraph.add_conditional_edges("Analyst", condition, mapping)
+        subgraph.add_edge("Tools", "Analyst")
+        subgraph.add_edge("MsgClear", END)
 
-        # Create analyst nodes
-        analyst_nodes = {}
-        delete_nodes = {}
-        tool_nodes = {}
+        return subgraph.compile()
 
-        if "market" in selected_analysts:
-            analyst_nodes["market"] = create_market_analyst(
-                self.quick_thinking_llm
-            )
-            delete_nodes["market"] = create_msg_delete()
-            tool_nodes["market"] = self.tool_nodes["market"]
+    def setup_graph(self, selected_analysts: list, is_standalone: bool = False):
+        """Constructs the high-level graph topology by connecting agent nodes."""
+        workflow = StateGraph(AgentState)
+        
+        # SEQUENTIAL EXECUTION: Chain Analyst Subgraphs
+        # We start with the START node as the entry point
+        last_node = START
 
-        if "social" in selected_analysts:
-            analyst_nodes["social"] = create_social_media_analyst(
-                self.quick_thinking_llm
-            )
-            delete_nodes["social"] = create_msg_delete()
-            tool_nodes["social"] = self.tool_nodes["social"]
+        for analyst_type in selected_analysts:
+            # 1. Create specific nodes for this analyst
+            if analyst_type == "market":
+                node = create_market_analyst(self.quick_thinking_llm)
+            elif analyst_type == "social":
+                node = create_social_media_analyst(self.quick_thinking_llm)
+            elif analyst_type == "news":
+                node = create_news_analyst(self.quick_thinking_llm)
+            elif analyst_type == "fundamentals":
+                node = create_fundamentals_analyst(self.quick_thinking_llm)
+            elif analyst_type == "industry":
+                node = create_industry_analyst(self.quick_thinking_llm)
+            elif analyst_type == "valuation":
+                node = create_valuation_analyst(self.quick_thinking_llm)
+            else:
+                continue
 
-        if "news" in selected_analysts:
-            analyst_nodes["news"] = create_news_analyst(
-                self.quick_thinking_llm
-            )
-            delete_nodes["news"] = create_msg_delete()
-            tool_nodes["news"] = self.tool_nodes["news"]
+            # 2. Get tools, delete node, and standard condition
+            tools = self.tool_nodes[analyst_type]
+            delete = create_msg_delete()
+            condition = self.conditional_logic.should_continue_analyst
 
-        if "fundamentals" in selected_analysts:
-            analyst_nodes["fundamentals"] = create_fundamentals_analyst(
-                self.quick_thinking_llm
-            )
-            delete_nodes["fundamentals"] = create_msg_delete()
-            tool_nodes["fundamentals"] = self.tool_nodes["fundamentals"]
+            # 3. Create mapping for conditional edges
+            mapping = {
+                "continue": "Tools",
+                "end": "MsgClear"
+            }
+
+            # 4. Build Subgraph
+            subgraph = self.build_analyst_subgraph(node, tools, delete, condition, mapping)
+            
+            # Map analyst type to report key
+            report_key_map = {
+                "market": "market_report",
+                "social": "sentiment_report",
+                "news": "news_report",
+                "fundamentals": "fundamentals_report",
+                "industry": "industry_report",
+                "valuation": "valuation_report"
+            }
+            target_report_key = report_key_map.get(analyst_type)
+
+            def make_safe_analyst_wrapper(compiled_subgraph, report_key, analyst_type):
+                def wrapper(state):
+                    # Use a generous recursion limit for subgraphs (but we'll have a hard limit too)
+                    sub_config = {"recursion_limit": 500}
+                    MAX_STEPS = 120 # ~40 tool cycles
+                    
+                    final_result = {}
+                    step_count = 0
+                    if self.progress_callback:
+                        self.progress_callback("status", f"Starting {analyst_type} analysis...")
+                    
+                    try:
+                        for chunk in compiled_subgraph.stream(state, config=sub_config):
+                            step_count += 1
+                            if step_count > MAX_STEPS:
+                                msg = f"⚠️ [{analyst_type.capitalize()}] Step limit ({MAX_STEPS}) reached. Forcing termination."
+                                if self.progress_callback:
+                                    self.progress_callback("status", msg)
+                                logger.warning(msg)
+                                break
+
+                            # Capture any updates from any node in the subgraph
+                            for node_name, node_output in chunk.items():
+                                if node_output:
+                                    # Merge updates into final_result
+                                    final_result.update(node_output)
+                                
+                                # Log activity for better visibility
+                                if node_name == "Analyst":
+                                    msg = f"[{analyst_type.capitalize()}] Step {step_count}: Thinking..."
+                                    if self.progress_callback:
+                                        self.progress_callback("status", msg)
+                                elif node_name == "Tools":
+                                    msg = f"[{analyst_type.capitalize()}] Step {step_count}: Executing tools..."
+                                    if self.progress_callback:
+                                        self.progress_callback("status", msg)
+                                elif node_name == "MsgClear":
+                                    msg = f"[{analyst_type.capitalize()}] Completing analysis..."
+                                    if self.progress_callback:
+                                        self.progress_callback("status", msg)
+
+                    except Exception as e:
+                        msg = f"❌ [{analyst_type.capitalize()}] Analysis failed: {e}"
+                        if self.progress_callback:
+                            self.progress_callback("status", msg)
+                        logger.error(msg)
+                    
+                    report_content = final_result.get(report_key)
+                    if not report_content or not str(report_content).strip():
+                        # SALVAGE MECHANISM: Search messages for partial report
+                        messages = final_result.get("messages", [])
+                        salvaged_text = ""
+                        # Look for the longest AI message that isn't a tool call
+                        for msg in reversed(messages):
+                            if hasattr(msg, "content") and msg.content and not getattr(msg, "tool_calls", None):
+                                if len(str(msg.content)) > len(salvaged_text):
+                                    salvaged_text = str(msg.content)
+                        
+                        if salvaged_text:
+                            report_content = f"⚠️ [{analyst_type.capitalize()}] **Step limit reached.** Recovered partial analysis:\n\n{salvaged_text}"
+                        else:
+                            report_content = f"⚠️ [{analyst_type.capitalize()}] Analysis incomplete (hit step limit or encountered an error)."
+                    
+                    updates = {report_key: report_content}
+                    return updates
+                return wrapper
+
+            safe_node = make_safe_analyst_wrapper(subgraph, target_report_key, analyst_type)
+            
+            node_name = f"{analyst_type.capitalize()} Analyst"
+            workflow.add_node(node_name, safe_node)
+            
+            # 5. Connect Sequentially: last_node -> current analyst
+            workflow.add_edge(last_node, node_name)
+            last_node = node_name
 
         # Create researcher and manager nodes
         bull_researcher_node = create_bull_researcher(
@@ -104,53 +200,24 @@ class GraphSetup:
         risk_manager_node = create_risk_manager(
             self.deep_thinking_llm, self.risk_manager_memory
         )
-
-        # Create workflow
-        workflow = StateGraph(AgentState)
-
-        # Add analyst nodes to the graph
-        for analyst_type, node in analyst_nodes.items():
-            workflow.add_node(f"{analyst_type.capitalize()} Analyst", node)
-            workflow.add_node(
-                f"Msg Clear {analyst_type.capitalize()}", delete_nodes[analyst_type]
-            )
-            workflow.add_node(f"tools_{analyst_type}", tool_nodes[analyst_type])
+        risk_metrics_computer = create_risk_metrics_node()
 
         # Add other nodes
         workflow.add_node("Bull Researcher", bull_researcher_node)
         workflow.add_node("Bear Researcher", bear_researcher_node)
         workflow.add_node("Research Manager", research_manager_node)
         workflow.add_node("Trader", trader_node)
+        workflow.add_node("Risk Metrics Computer", risk_metrics_computer)
         workflow.add_node("Aggressive Analyst", aggressive_analyst)
         workflow.add_node("Neutral Analyst", neutral_analyst)
         workflow.add_node("Conservative Analyst", conservative_analyst)
         workflow.add_node("Risk Judge", risk_manager_node)
 
-        # Define edges
-        # Start with the first analyst
-        first_analyst = selected_analysts[0]
-        workflow.add_edge(START, f"{first_analyst.capitalize()} Analyst")
-
-        # Connect analysts in sequence
-        for i, analyst_type in enumerate(selected_analysts):
-            current_analyst = f"{analyst_type.capitalize()} Analyst"
-            current_tools = f"tools_{analyst_type}"
-            current_clear = f"Msg Clear {analyst_type.capitalize()}"
-
-            # Add conditional edges for current analyst
-            workflow.add_conditional_edges(
-                current_analyst,
-                getattr(self.conditional_logic, f"should_continue_{analyst_type}"),
-                [current_tools, current_clear],
-            )
-            workflow.add_edge(current_tools, current_analyst)
-
-            # Connect to next analyst or to Bull Researcher if this is the last analyst
-            if i < len(selected_analysts) - 1:
-                next_analyst = f"{selected_analysts[i+1].capitalize()} Analyst"
-                workflow.add_edge(current_clear, next_analyst)
-            else:
-                workflow.add_edge(current_clear, "Bull Researcher")
+        # Connect last analyst to Bull Researcher (or END if standalone)
+        if is_standalone:
+            workflow.add_edge(last_node, END)
+        else:
+            workflow.add_edge(last_node, "Bull Researcher")
 
         # Add remaining edges
         workflow.add_conditional_edges(
@@ -170,7 +237,8 @@ class GraphSetup:
             },
         )
         workflow.add_edge("Research Manager", "Trader")
-        workflow.add_edge("Trader", "Aggressive Analyst")
+        workflow.add_edge("Trader", "Risk Metrics Computer")
+        workflow.add_edge("Risk Metrics Computer", "Aggressive Analyst")
         workflow.add_conditional_edges(
             "Aggressive Analyst",
             self.conditional_logic.should_continue_risk_analysis,

@@ -1,6 +1,8 @@
 from langchain_core.tools import tool
 from typing import Annotated
 from tradingagents.dataflows.interface import route_to_vendor
+from tradingagents.agents.utils.resilient import resilient_call
+
 
 @tool
 def get_news(
@@ -18,7 +20,11 @@ def get_news(
     Returns:
         str: A formatted string containing news data
     """
-    return route_to_vendor("get_news", ticker, start_date, end_date)
+    return resilient_call(
+        route_to_vendor, "get_news", ticker, start_date, end_date,
+        tool_name="get_news",
+    )
+
 
 @tool
 def get_global_news(
@@ -36,7 +42,11 @@ def get_global_news(
     Returns:
         str: A formatted string containing global news data
     """
-    return route_to_vendor("get_global_news", curr_date, look_back_days, limit)
+    return resilient_call(
+        route_to_vendor, "get_global_news", curr_date, look_back_days, limit,
+        tool_name="get_global_news",
+    )
+
 
 @tool
 def get_insider_transactions(
@@ -50,4 +60,7 @@ def get_insider_transactions(
     Returns:
         str: A report of insider transaction data
     """
-    return route_to_vendor("get_insider_transactions", ticker)
+    return resilient_call(
+        route_to_vendor, "get_insider_transactions", ticker,
+        tool_name="get_insider_transactions",
+    )

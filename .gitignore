@@ -217,3 +217,15 @@ __marimo__/
 
 # Cache
 **/data_cache/
+
+# Trading Analysis Results
+reports/
+results/
+results_diagnose/
+results_verify/
+
+# Test and Run Results
+reports/
+results/
+results_diagnose/
+results_verify/

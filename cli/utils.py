@@ -2,12 +2,17 @@ import questionary
 from typing import List, Optional, Tuple, Dict
 
 from cli.models import AnalystType
+from rich.console import Console
+
+console = Console()
 
 ANALYST_ORDER = [
     ("Market Analyst", AnalystType.MARKET),
     ("Social Media Analyst", AnalystType.SOCIAL),
     ("News Analyst", AnalystType.NEWS),
     ("Fundamentals Analyst", AnalystType.FUNDAMENTALS),
+    ("Industry Analyst", AnalystType.INDUSTRY),
+    ("Valuation Analyst", AnalystType.VALUATION),
 ]
 
 
@@ -90,18 +95,53 @@ def select_analysts() -> List[AnalystType]:
     return choices
 
 
-def select_research_depth() -> int:
-    """Select research depth using an interactive selection."""
+def select_report_language() -> str:
+    """Select report output language.
 
-    # Define research depth options with their corresponding values
-    DEPTH_OPTIONS = [
-        ("Shallow - Quick research, few debate and strategy discussion rounds", 1),
-        ("Medium - Middle ground, moderate debate rounds and strategy discussion", 3),
-        ("Deep - Comprehensive research, in depth debate and strategy discussion", 5),
+    Returns one of: 'en', 'zh'.
+    """
+    LANG_OPTIONS = [
+        ("English — Output report in English (original)", "en"),
+        ("中文    — 翻译并输出中文报告", "zh"),
     ]
 
     choice = questionary.select(
-        "Select Your [Research Depth]:",
+        "Select Report Language / 选择报告语言:",
+        choices=[
+            questionary.Choice(display, value=value) for display, value in LANG_OPTIONS
+        ],
+        instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
+        style=questionary.Style(
+            [
+                ("selected", "fg:cyan noinherit"),
+                ("highlighted", "fg:cyan noinherit"),
+                ("pointer", "fg:cyan noinherit"),
+            ]
+        ),
+    ).ask()
+
+    if choice is None:
+        return "en"
+
+    return choice
+
+
+def select_research_depth() -> str:
+    """Select research depth using an interactive selection.
+    
+    Returns one of: 'quick', 'standard', 'deep'.
+    """
+
+    # Define research depth options with their corresponding values
+    DEPTH_OPTIONS = [
+        ("Quick   — Market + Fundamentals, 1 debate round, minimal API usage", "quick"),
+        ("Standard — + News + Sentiment + Valuation, 2 debate rounds, moderate API usage", "standard"),
+        ("Deep    — + Industry + Valuation, 2 debate rounds, all data sources", "deep"),
+        ("Standalone — Pick 1 Agent, Run 1 Report, No Debate (Fastest)", "standalone"),
+    ]
+
+    choice = questionary.select(
+        "Select Your [Analysis Depth]:",
         choices=[
             questionary.Choice(display, value=value) for display, value in DEPTH_OPTIONS
         ],
@@ -122,34 +162,31 @@ def select_research_depth() -> int:
     return choice
 
 
+
 def select_shallow_thinking_agent(provider) -> str:
     """Select shallow thinking llm engine using an interactive selection."""
 
     # Define shallow thinking llm engine options with their corresponding model names
     SHALLOW_AGENT_OPTIONS = {
         "openai": [
-            ("GPT-5 Mini - Cost-optimized reasoning", "gpt-5-mini"),
-            ("GPT-5 Nano - Ultra-fast, high-throughput", "gpt-5-nano"),
+            ("GPT-5 Mini - Cost-optimized reasoning (Recommended)", "gpt-5-mini"),
             ("GPT-5.2 - Latest flagship", "gpt-5.2"),
             ("GPT-5.1 - Flexible reasoning", "gpt-5.1"),
             ("GPT-4.1 - Smartest non-reasoning, 1M context", "gpt-4.1"),
         ],
         "anthropic": [
-            ("Claude Haiku 4.5 - Fast + extended thinking", "claude-haiku-4-5"),
+            ("Claude Haiku 4.5 - Fast + extended thinking (Recommended)", "claude-haiku-4-5"),
             ("Claude Sonnet 4.5 - Best for agents/coding", "claude-sonnet-4-5"),
-            ("Claude Sonnet 4 - High-performance", "claude-sonnet-4-20250514"),
         ],
         "google": [
+            ("Gemini 2.5 Flash - Balanced (Recommended)", "gemini-2.5-flash"),
             ("Gemini 3 Flash - Next-gen fast", "gemini-3-flash-preview"),
-            ("Gemini 2.5 Flash - Balanced, recommended", "gemini-2.5-flash"),
             ("Gemini 3 Pro - Reasoning-first", "gemini-3-pro-preview"),
             ("Gemini 2.5 Flash Lite - Fast, low-cost", "gemini-2.5-flash-lite"),
         ],
         "xai": [
-            ("Grok 4.1 Fast (Non-Reasoning) - Speed optimized, 2M ctx", "grok-4-1-fast-non-reasoning"),
-            ("Grok 4 Fast (Non-Reasoning) - Speed optimized", "grok-4-fast-non-reasoning"),
+            ("Grok 4.1 Fast (Non-Reasoning) - Speed optimized, 2M ctx (Recommended)", "grok-4-1-fast-non-reasoning"),
             ("Grok 4.1 Fast (Reasoning) - High-performance, 2M ctx", "grok-4-1-fast-reasoning"),
-            ("Grok 4 Fast (Reasoning) - High-performance", "grok-4-fast-reasoning"),
         ],
         "openrouter": [
             ("NVIDIA Nemotron 3 Nano 30B (free)", "nvidia/nemotron-3-nano-30b-a3b:free"),
@@ -161,14 +198,12 @@ def select_shallow_thinking_agent(provider) -> str:
             ("GLM-4.7-Flash:latest (30B, local)", "glm-4.7-flash:latest"),
         ],
         "deepseek": [
-            ("Deepseek Chat - 通用对话 (128K context)", "deepseek-chat"),
+            ("Deepseek Chat - 通用对话 (128K context) (推荐)", "deepseek-chat"),
             ("Deepseek Reasoner - 推理模式", "deepseek-reasoner"),
         ],
         "qwen": [
-            ("Qwen Turbo - 快速响应", "qwen-turbo"),
-            ("Qwen Plus - 平衡", "qwen-plus"),
-            ("Qwen Max - 最强能力", "qwen-max"),
-            ("Qwen Long - 长文本", "qwen-long"),
+            ("Qwen Flash - Fast (推荐)", "qwen-flash"),
+            ("Qwen 3.5 Plus - 1M Context", "qwen3.5-plus"),
         ],
     }
 
@@ -203,31 +238,25 @@ def select_deep_thinking_agent(provider) -> str:
     # Define deep thinking llm engine options with their corresponding model names
     DEEP_AGENT_OPTIONS = {
         "openai": [
-            ("GPT-5.2 - Latest flagship", "gpt-5.2"),
+            ("GPT-5.2 - Latest flagship (Recommended)", "gpt-5.2"),
             ("GPT-5.1 - Flexible reasoning", "gpt-5.1"),
-            ("GPT-5 - Advanced reasoning", "gpt-5"),
             ("GPT-4.1 - Smartest non-reasoning, 1M context", "gpt-4.1"),
             ("GPT-5 Mini - Cost-optimized reasoning", "gpt-5-mini"),
-            ("GPT-5 Nano - Ultra-fast, high-throughput", "gpt-5-nano"),
         ],
         "anthropic": [
-            ("Claude Sonnet 4.5 - Best for agents/coding", "claude-sonnet-4-5"),
+            ("Claude Sonnet 4.5 - Best for agents/coding (Recommended)", "claude-sonnet-4-5"),
             ("Claude Opus 4.5 - Premium, max intelligence", "claude-opus-4-5"),
-            ("Claude Opus 4.1 - Most capable model", "claude-opus-4-1-20250805"),
             ("Claude Haiku 4.5 - Fast + extended thinking", "claude-haiku-4-5"),
-            ("Claude Sonnet 4 - High-performance", "claude-sonnet-4-20250514"),
         ],
         "google": [
-            ("Gemini 3 Pro - Reasoning-first", "gemini-3-pro-preview"),
+            ("Gemini 3 Pro - Reasoning-first (Recommended)", "gemini-3-pro-preview"),
             ("Gemini 3 Flash - Next-gen fast", "gemini-3-flash-preview"),
             ("Gemini 2.5 Flash - Balanced, recommended", "gemini-2.5-flash"),
         ],
         "xai": [
-            ("Grok 4.1 Fast (Reasoning) - High-performance, 2M ctx", "grok-4-1-fast-reasoning"),
-            ("Grok 4 Fast (Reasoning) - High-performance", "grok-4-fast-reasoning"),
+            ("Grok 4.1 Fast (Reasoning) - High-performance, 2M ctx (Recommended)", "grok-4-1-fast-reasoning"),
             ("Grok 4 - Flagship model", "grok-4-0709"),
             ("Grok 4.1 Fast (Non-Reasoning) - Speed optimized, 2M ctx", "grok-4-1-fast-non-reasoning"),
-            ("Grok 4 Fast (Non-Reasoning) - Speed optimized", "grok-4-fast-non-reasoning"),
         ],
         "openrouter": [
             ("Z.AI GLM 4.5 Air (free)", "z-ai/glm-4.5-air:free"),
@@ -239,14 +268,12 @@ def select_deep_thinking_agent(provider) -> str:
             ("Qwen3:latest (8B, local)", "qwen3:latest"),
         ],
         "deepseek": [
-            ("Deepseek Reasoner - 推理模式", "deepseek-reasoner"),
+            ("Deepseek Reasoner - 推理模式 (推荐)", "deepseek-reasoner"),
             ("Deepseek Chat - 通用对话 (128K context)", "deepseek-chat"),
         ],
         "qwen": [
-            ("Qwen Max - 最强能力", "qwen-max"),
-            ("Qwen Plus - 平衡", "qwen-plus"),
-            ("Qwen Long - 长文本", "qwen-long"),
-            ("Qwen Turbo - 快速响应", "qwen-turbo"),
+            ("Qwen 3.5 Plus - 1M Context (推荐)", "qwen3.5-plus"),
+            ("Qwen Flash - Fast", "qwen-flash"),
         ],
     }
 
@@ -348,3 +375,29 @@ def ask_gemini_thinking_config() -> str | None:
             ("pointer", "fg:green noinherit"),
         ]),
     ).ask()
+
+def select_single_analyst() -> str:
+    """Select a single analyst for standalone mode."""
+    choice = questionary.select(
+        "Select the [Single Agent] to run:",
+        choices=[
+            questionary.Choice(display, value=value) for display, value in ANALYST_ORDER
+        ],
+        instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
+        style=questionary.Style(
+            [
+                ("selected", "fg:green noinherit"),
+                ("highlighted", "fg:green noinherit"),
+                ("pointer", "fg:green noinherit"),
+            ]
+        ),
+    ).ask()
+
+    if not choice:
+        console.print("\n[red]No analyst selected. Exiting...[/red]")
+        exit(1)
+
+    return choice
+
+
+

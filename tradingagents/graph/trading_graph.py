@@ -30,7 +30,14 @@ from tradingagents.agents.utils.agent_utils import (
     get_income_statement,
     get_news,
     get_insider_transactions,
-    get_global_news
+    get_global_news,
+    get_social_sentiment,
+    get_quant_grades,
+)
+from tradingagents.agents.utils.valuation_calc_tools import (
+    calculate_wacc,
+    calculate_dcf,
+    calculate_relative_valuation,
 )
 
 from .conditional_logic import ConditionalLogic
@@ -49,18 +56,21 @@ class TradingAgentsGraph:
         debug=False,
         config: Dict[str, Any] = None,
         callbacks: Optional[List] = None,
+        progress_callback: Optional[Any] = None,
     ):
         """Initialize the trading agents graph and components.
-
+ 
         Args:
             selected_analysts: List of analyst types to include
             debug: Whether to run in debug mode
             config: Configuration dictionary. If None, uses default config
             callbacks: Optional list of callback handlers (e.g., for tracking LLM/tool stats)
+            progress_callback: Optional function for real-time progress updates (e.g. for CLI)
         """
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
         self.callbacks = callbacks or []
+        self.progress_callback = progress_callback
 
         # Update the interface's config
         set_config(self.config)
@@ -119,6 +129,7 @@ class TradingAgentsGraph:
             self.invest_judge_memory,
             self.risk_manager_memory,
             self.conditional_logic,
+            progress_callback=self.progress_callback,
         )
 
         self.propagator = Propagator(
@@ -133,7 +144,8 @@ class TradingAgentsGraph:
         self.log_states_dict = {}  # date to full state dict
 
         # Set up the graph
-        self.graph = self.graph_setup.setup_graph(selected_analysts)
+        is_standalone = self.config.get("analysis_depth") == "standalone"
+        self.graph = self.graph_setup.setup_graph(selected_analysts, is_standalone=is_standalone)
 
     def _get_provider_kwargs(self) -> Dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation."""
@@ -141,6 +153,7 @@ class TradingAgentsGraph:
         provider = self.config.get("llm_provider", "").lower()
 
         if provider == "google":
+            kwargs["max_retries"] = 6
             thinking_level = self.config.get("google_thinking_level")
             if thinking_level:
                 kwargs["thinking_level"] = thinking_level
@@ -165,8 +178,10 @@ class TradingAgentsGraph:
             ),
             "social": ToolNode(
                 [
-                    # News tools for social media analysis
+                    # News + sentiment + quant grades for social media analysis
                     get_news,
+                    get_social_sentiment,
+                    get_quant_grades,
                 ]
             ),
             "news": ToolNode(
@@ -184,6 +199,29 @@ class TradingAgentsGraph:
                     get_balance_sheet,
                     get_cashflow,
                     get_income_statement,
+                    get_insider_transactions,
+                ]
+            ),
+            "industry": ToolNode(
+                [
+                    # Industry & strategy analysis tools
+                    get_news,
+                    get_global_news,
+                    get_fundamentals,
+                ]
+            ),
+            "valuation": ToolNode(
+                [
+                    # Valuation analysis tools (financial data + market data + calc tools)
+                    get_fundamentals,
+                    get_balance_sheet,
+                    get_cashflow,
+                    get_income_statement,
+                    get_stock_data,
+                    get_indicators,
+                    calculate_wacc,
+                    calculate_dcf,
+                    calculate_relative_valuation,
                 ]
             ),
         }
@@ -224,38 +262,40 @@ class TradingAgentsGraph:
         self._log_state(trade_date, final_state)
 
         # Return decision and processed signal
-        return final_state, self.process_signal(final_state["final_trade_decision"])
+        decision = final_state.get("final_trade_decision")
+        signal = self.process_signal(decision) if decision else None
+        return final_state, signal
 
     def _log_state(self, trade_date, final_state):
         """Log the final state to a JSON file."""
+        inv_state = final_state.get("investment_debate_state", {})
+        risk_state = final_state.get("risk_debate_state", {})
+
         self.log_states_dict[str(trade_date)] = {
-            "company_of_interest": final_state["company_of_interest"],
-            "trade_date": final_state["trade_date"],
-            "market_report": final_state["market_report"],
-            "sentiment_report": final_state["sentiment_report"],
-            "news_report": final_state["news_report"],
-            "fundamentals_report": final_state["fundamentals_report"],
+            "company_of_interest": final_state.get("company_of_interest"),
+            "trade_date": final_state.get("trade_date"),
+            "market_report": final_state.get("market_report", ""),
+            "sentiment_report": final_state.get("sentiment_report", ""),
+            "news_report": final_state.get("news_report", ""),
+            "fundamentals_report": final_state.get("fundamentals_report", ""),
+            "industry_report": final_state.get("industry_report", ""),
             "investment_debate_state": {
-                "bull_history": final_state["investment_debate_state"]["bull_history"],
-                "bear_history": final_state["investment_debate_state"]["bear_history"],
-                "history": final_state["investment_debate_state"]["history"],
-                "current_response": final_state["investment_debate_state"][
-                    "current_response"
-                ],
-                "judge_decision": final_state["investment_debate_state"][
-                    "judge_decision"
-                ],
+                "bull_history": inv_state.get("bull_history", ""),
+                "bear_history": inv_state.get("bear_history", ""),
+                "history": inv_state.get("history", ""),
+                "current_response": inv_state.get("current_response", ""),
+                "judge_decision": inv_state.get("judge_decision", ""),
             },
-            "trader_investment_decision": final_state["trader_investment_plan"],
+            "trader_investment_decision": final_state.get("trader_investment_plan"),
             "risk_debate_state": {
-                "aggressive_history": final_state["risk_debate_state"]["aggressive_history"],
-                "conservative_history": final_state["risk_debate_state"]["conservative_history"],
-                "neutral_history": final_state["risk_debate_state"]["neutral_history"],
-                "history": final_state["risk_debate_state"]["history"],
-                "judge_decision": final_state["risk_debate_state"]["judge_decision"],
+                "aggressive_history": risk_state.get("aggressive_history", ""),
+                "conservative_history": risk_state.get("conservative_history", ""),
+                "neutral_history": risk_state.get("neutral_history", ""),
+                "history": risk_state.get("history", ""),
+                "judge_decision": risk_state.get("judge_decision", ""),
             },
-            "investment_plan": final_state["investment_plan"],
-            "final_trade_decision": final_state["final_trade_decision"],
+            "investment_plan": final_state.get("investment_plan"),
+            "final_trade_decision": final_state.get("final_trade_decision"),
         }
 
         # Save to file under configured results directory

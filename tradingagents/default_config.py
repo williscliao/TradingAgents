@@ -8,17 +8,21 @@ DEFAULT_CONFIG = {
         "dataflows/data_cache",
     ),
     # LLM settings
-    "llm_provider": "openai",
-    "deep_think_llm": "gpt-5.2",
-    "quick_think_llm": "gpt-5-mini",
-    "backend_url": "https://api.openai.com/v1",
+    # LLM settings
+    "llm_provider": "qwen",
+    "deep_think_llm": "qwen3.5-plus",  # High-accuracy model
+    "quick_think_llm": "qwen-plus",    # Fast model
+    "backend_url": None,               # Uses DashScope default
     # Provider-specific thinking configuration
     "google_thinking_level": None,      # "high", "minimal", etc.
     "openai_reasoning_effort": None,    # "medium", "high", "low"
+    # Analysis depth: "quick", "standard", or "deep"
+    # Controls which analysts, debate rounds, and data sources are used.
+    "analysis_depth": "standard",
     # Debate and discussion settings
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
-    "max_recur_limit": 200,
+    "max_recur_limit": 1000,
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
     "data_vendors": {
@@ -30,5 +34,29 @@ DEFAULT_CONFIG = {
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {
         # Example: "get_stock_data": "alpha_vantage",  # Override category default
+    },
+}
+
+# ── Analysis depth presets ──────────────────────────────────────────
+# Each preset defines: analysts, debate rounds, risk rounds, and
+# whether to use Alpha Vantage sentiment-scored news (expensive).
+DEPTH_PRESETS = {
+    "quick": {
+        "analysts": ["market", "fundamentals"],
+        "max_debate_rounds": 1,
+        "max_risk_discuss_rounds": 0,
+        "use_av_sentiment_news": False,
+    },
+    "standard": {
+        "analysts": ["market", "fundamentals", "news", "social", "valuation"],
+        "max_debate_rounds": 2,
+        "max_risk_discuss_rounds": 1,
+        "use_av_sentiment_news": False,
+    },
+    "deep": {
+        "analysts": ["market", "fundamentals", "news", "social", "industry", "valuation"],
+        "max_debate_rounds": 2,
+        "max_risk_discuss_rounds": 2,
+        "use_av_sentiment_news": True,
     },
 }

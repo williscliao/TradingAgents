@@ -3,7 +3,9 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import yfinance as yf
 import os
+import threading
 from .stockstats_utils import StockstatsUtils
+
 
 
 def resolve_ticker_to_symbol_and_name(ticker: str) -> tuple[str, str]:
@@ -80,15 +82,58 @@ def get_YFin_data_online(
 
     return header + csv_string
 
+
+def prefetch_stock_data(symbol: str):
+    """Pre-fetch stock data once to ensure all parallel analysts hit the cache.
+    Called by the graph pre-fetch node.
+    """
+    from .config import get_config
+    import pandas as pd
+    
+    config = get_config()
+    today_date = pd.Timestamp.today()
+    start_date = today_date - pd.DateOffset(years=2)
+    start_date_str = start_date.strftime("%Y-%m-%d")
+    end_date_str = today_date.strftime("%Y-%m-%d")
+    
+    os.makedirs(config["data_cache_dir"], exist_ok=True)
+    data_file = os.path.join(
+        config["data_cache_dir"],
+        f"{symbol}-YFin-data-{start_date_str}-{end_date_str}.csv",
+    )
+    
+    if not os.path.exists(data_file):
+        print(f"Pre-fetching data for {symbol}...")
+        data = yf.download(
+            symbol,
+            start=start_date_str,
+            end=end_date_str,
+            multi_level_index=False,
+            progress=False,
+            auto_adjust=True,
+        )
+        if not data.empty:
+            data = data.reset_index()
+            # Atomic write via temp file
+            temp_file = data_file + ".tmp"
+            data.to_csv(temp_file, index=False)
+            os.rename(temp_file, data_file)
+            print(f"Data for {symbol} cached successfully.")
+        else:
+            print(f"Warning: No data found for {symbol} during pre-fetch.")
+
+
 def get_stock_stats_indicators_window(
     symbol: Annotated[str, "ticker symbol of the company"],
-    indicator: Annotated[str, "technical indicator to get the analysis and report of"],
+    indicator: Annotated[str, "technical indicator to get the analysis and report of (can be comma-separated list)"],
     curr_date: Annotated[
         str, "The current trading date you are trading on, YYYY-mm-dd"
     ],
     look_back_days: Annotated[int, "how many days to look back"],
 ) -> str:
-
+    # Normalize and handle multiple indicators
+    indicators_request = [i.strip().lower() for i in indicator.split(',')]
+    
     best_ind_params = {
         # Moving Averages
         "close_50_sma": (
@@ -160,62 +205,101 @@ def get_stock_stats_indicators_window(
             "Usage: Identify overbought (>80) or oversold (<20) conditions and confirm the strength of trends or reversals. "
             "Tips: Use alongside RSI or MACD to confirm signals; divergence between price and MFI can indicate potential reversals."
         ),
+        # Trend Strength Indicators
+        "adx": (
+            "ADX: Average Directional Index measures trend strength on a 0-100 scale. "
+            "Usage: ADX > 25 = strong trend (use trend-following strategies), ADX < 20 = weak/ranging market (use mean-reversion). "
+            "Tips: ADX only measures strength, NOT direction. Combine with +DI/-DI or price action for direction. "
+            "Rising ADX = strengthening trend; falling ADX = weakening trend, even if price continues moving."
+        ),
+        "cci": (
+            "CCI: Commodity Channel Index measures deviation from statistical mean. "
+            "Usage: CCI > +100 = overbought / bullish momentum; CCI < -100 = oversold / bearish momentum. "
+            "Tips: Strong trends can keep CCI extreme for long periods. Best used for identifying cyclical turning points and divergence."
+        ),
+        "wr": (
+            "WR: Williams %R is a fast momentum oscillator ranging from 0 to -100. "
+            "Usage: WR > -20 = overbought; WR < -80 = oversold. Faster than RSI for detecting reversals. "
+            "Tips: In strong trends, WR can stay overbought/oversold for extended periods. Best for timing entries within a confirmed trend."
+        ),
+        # Trend Following
+        "supertrend": (
+            "Supertrend: A trend-following overlay based on ATR. Gives clear buy/sell signals when price crosses the Supertrend line. "
+            "Usage: Price above Supertrend = bullish; price below = bearish. Use for trend direction and trailing stop placement. "
+            "Tips: Works best in trending markets (ADX > 25). Generates false signals in ranging/choppy markets."
+        ),
+        "aroon": (
+            "Aroon Oscillator: Measures time elapsed since the highest high and lowest low over a period. Range: -100 to +100. "
+            "Usage: Aroon > 0 = bullish (recent highs); Aroon < 0 = bearish (recent lows). Strong signals near ±100. "
+            "Tips: Early trend detector — Aroon often signals new trends before moving averages. Good for identifying trend initiation."
+        ),
+        # Asian-market popular
+        "kdjk": (
+            "KDJ-K: The K line of the KDJ indicator (stochastic-based). "
+            "Usage: K crossing above D = bullish signal; K crossing below D = bearish. K > 80 = overbought; K < 20 = oversold. "
+            "Tips: More sensitive than standard Stochastic. The J line (kdjj) can exceed 0-100 range, providing early extreme signals."
+        ),
+        "kdjd": (
+            "KDJ-D: The D line (smoothed K) of the KDJ indicator. "
+            "Usage: Acts as the signal line for KDJ. K-D crossovers generate trading signals. "
+            "Tips: When both K and D are above 80 and K crosses below D, it is a strong sell signal, and vice versa below 20."
+        ),
+        "trix": (
+            "TRIX: Triple Exponential Moving Average rate of change. Filters out insignificant price moves. "
+            "Usage: TRIX > 0 = bullish momentum; TRIX < 0 = bearish. Cross above/below zero line = trend change signal. "
+            "Tips: Very smooth indicator — excellent for spotting divergence and filtering noise. Slow to react but low false signals."
+        ),
     }
 
-    if indicator not in best_ind_params:
-        raise ValueError(
-            f"Indicator {indicator} is not supported. Please choose from: {list(best_ind_params.keys())}"
-        )
+    # Common aliases mapping
+    _ALIASES = {
+        "sma": "close_50_sma", "sma_50": "close_50_sma", "sma_200": "close_200_sma",
+        "50_sma": "close_50_sma", "200_sma": "close_200_sma",
+        "ema": "close_10_ema", "ema_10": "close_10_ema", "10_ema": "close_10_ema",
+        "macd_signal": "macds", "macd_histogram": "macdh",
+        "bollinger": "boll", "bollinger_upper": "boll_ub", "bollinger_lower": "boll_lb",
+        "money_flow": "mfi", "williams": "wr", "commodity_channel_index": "cci",
+        "kdj": "kdjk", "stochastic": "kdjk",
+    }
 
-    end_date = curr_date
-    curr_date_dt = datetime.strptime(curr_date, "%Y-%m-%d")
-    before = curr_date_dt - relativedelta(days=look_back_days)
+    combined_reports = []
+    
+    for ind in indicators_request:
+        actual_ind = _ALIASES.get(ind, ind)
+        
+        if actual_ind not in best_ind_params:
+            combined_reports.append(f"ERROR: Indicator '{ind}' is not supported.")
+            continue
 
-    # Optimized: Get stock data once and calculate indicators for all dates
-    try:
-        indicator_data = _get_stock_stats_bulk(symbol, indicator, curr_date)
-        
-        # Generate the date range we need
-        current_dt = curr_date_dt
-        date_values = []
-        
-        while current_dt >= before:
-            date_str = current_dt.strftime('%Y-%m-%d')
-            
-            # Look up the indicator value for this date
-            if date_str in indicator_data:
-                indicator_value = indicator_data[date_str]
-            else:
-                indicator_value = "N/A: Not a trading day (weekend or holiday)"
-            
-            date_values.append((date_str, indicator_value))
-            current_dt = current_dt - relativedelta(days=1)
-        
-        # Build the result string
-        ind_string = ""
-        for date_str, value in date_values:
-            ind_string += f"{date_str}: {value}\n"
-        
-    except Exception as e:
-        print(f"Error getting bulk stockstats data: {e}")
-        # Fallback to original implementation if bulk method fails
-        ind_string = ""
+        end_date = curr_date
         curr_date_dt = datetime.strptime(curr_date, "%Y-%m-%d")
-        while curr_date_dt >= before:
-            indicator_value = get_stockstats_indicator(
-                symbol, indicator, curr_date_dt.strftime("%Y-%m-%d")
+        before = curr_date_dt - relativedelta(days=look_back_days)
+
+        try:
+            indicator_data = _get_stock_stats_bulk(symbol, actual_ind, curr_date)
+            
+            # Generate the date range we need
+            current_dt = curr_date_dt
+            date_values = []
+            while current_dt >= before:
+                date_str = current_dt.strftime('%Y-%m-%d')
+                val = indicator_data.get(date_str, "N/A: Not a trading day")
+                date_values.append((date_str, val))
+                current_dt = current_dt - relativedelta(days=1)
+            
+            ind_string = "\n".join([f"{d}: {v}" for d, v in date_values])
+            
+            report = (
+                f"### {actual_ind.upper()} ({before.strftime('%Y-%m-%d')} to {end_date})\n"
+                f"{ind_string}\n\n"
+                f"Description: {best_ind_params[actual_ind]}\n"
             )
-            ind_string += f"{curr_date_dt.strftime('%Y-%m-%d')}: {indicator_value}\n"
-            curr_date_dt = curr_date_dt - relativedelta(days=1)
+            combined_reports.append(report)
+            
+        except Exception as e:
+            combined_reports.append(f"ERROR processing '{ind}': {e}")
 
-    result_str = (
-        f"## {indicator} values from {before.strftime('%Y-%m-%d')} to {end_date}:\n\n"
-        + ind_string
-        + "\n\n"
-        + best_ind_params.get(indicator, "No description available.")
-    )
-
-    return result_str
+    return f"# Technical Indicators Report for {symbol.upper()}\n\n" + "\n---\n".join(combined_reports)
 
 
 def _get_stock_stats_bulk(
@@ -254,7 +338,7 @@ def _get_stock_stats_bulk(
         curr_date_dt = pd.to_datetime(curr_date)
         
         end_date = today_date
-        start_date = today_date - pd.DateOffset(years=15)
+        start_date = today_date - pd.DateOffset(years=2)
         start_date_str = start_date.strftime("%Y-%m-%d")
         end_date_str = end_date.strftime("%Y-%m-%d")
         
@@ -269,6 +353,7 @@ def _get_stock_stats_bulk(
             data = pd.read_csv(data_file)
             data["Date"] = pd.to_datetime(data["Date"])
         else:
+            print(f"Downloading data for {symbol}...")
             data = yf.download(
                 symbol,
                 start=start_date_str,
@@ -277,8 +362,13 @@ def _get_stock_stats_bulk(
                 progress=False,
                 auto_adjust=True,
             )
+            if data.empty:
+                raise Exception(f"No data found for {symbol}")
             data = data.reset_index()
-            data.to_csv(data_file, index=False)
+            # Atomic write via temp file
+            temp_file = data_file + ".tmp"
+            data.to_csv(temp_file, index=False)
+            os.rename(temp_file, data_file)
         
         df = wrap(data)
         df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")

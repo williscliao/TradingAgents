@@ -1,6 +1,7 @@
 from langchain_core.tools import tool
 from typing import Annotated
 from tradingagents.dataflows.interface import route_to_vendor
+from tradingagents.agents.utils.resilient import resilient_call
 
 
 @tool
@@ -19,4 +20,7 @@ def get_stock_data(
     Returns:
         str: A formatted dataframe containing the stock price data for the specified ticker symbol in the specified date range.
     """
-    return route_to_vendor("get_stock_data", symbol, start_date, end_date)
+    return resilient_call(
+        route_to_vendor, "get_stock_data", symbol, start_date, end_date,
+        tool_name="get_stock_data",
+    )

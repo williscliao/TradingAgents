@@ -1,6 +1,6 @@
-from langchain_core.messages import AIMessage
 import time
 import json
+from tradingagents.agents.utils.agent_utils import truncate_content
 
 
 def create_bull_researcher(llm, memory):
@@ -14,8 +14,17 @@ def create_bull_researcher(llm, memory):
         sentiment_report = state["sentiment_report"]
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
+        industry_report = state.get("industry_report", "")
 
-        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
+        # Truncate reports to keep context window manageable
+        market_research_report = truncate_content(market_research_report, 4000)
+        sentiment_report = truncate_content(sentiment_report, 4000)
+        news_report = truncate_content(news_report, 4000)
+        fundamentals_report = truncate_content(fundamentals_report, 4000)
+        industry_report = truncate_content(industry_report, 4000)
+        history = truncate_content(history, 8000)
+
+        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}\n\n{industry_report}"
         past_memories = memory.get_memories(curr_situation, n_matches=2)
 
         past_memory_str = ""
@@ -36,6 +45,7 @@ Market research report: {market_research_report}
 Social media sentiment report: {sentiment_report}
 Latest world affairs news: {news_report}
 Company fundamentals report: {fundamentals_report}
+Industry & competitive landscape report: {industry_report}
 Conversation history of the debate: {history}
 Last bear argument: {current_response}
 Reflections from similar situations and lessons learned: {past_memory_str}
