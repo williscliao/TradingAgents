@@ -201,3 +201,142 @@ def calculate_relative_valuation(
         lines.append(f"| {p.get('name', '?')} | {pe} | {ev} | {ps} | {pb} |")
 
     return "\n".join(lines)
+
+import yfinance as yf
+
+@tool
+def get_full_valuation_metrics(
+    ticker: Annotated[str, "Ticker symbol of the target company"],
+) -> str:
+    """
+    Fetch comprehensive valuation data and pre-calculated baseline models for a company.
+    
+    This single tool pulls the company's fundamentals, balance sheet, and metrics,
+    and automatically computes WACC and a baseline DCF. It also pulls basic peer multiples.
+    
+    Use this single tool to gather all quantitative inputs you need for Phase 3 valuation.
+    """
+    try:
+        t = yf.Ticker(ticker.upper())
+        info = t.info
+        if not info:
+            return f"ERROR: No fundamental data found for ticker '{ticker}'"
+            
+        # 1. Extract Core Inputs
+        market_cap = info.get("marketCap", 0)
+        total_debt = info.get("totalDebt", 0)
+        cash = info.get("totalCash", 0)
+        net_debt = total_debt - cash
+        shares_out = info.get("sharesOutstanding", 1)
+        beta = info.get("beta", 1.0)
+        fcf = info.get("freeCashflow", 0)
+        ebitda = info.get("ebitda", 0)
+        revenue = info.get("totalRevenue", 0)
+        eps = info.get("trailingEps", 0)
+        
+        # Sector and Industry for Model Selection
+        sector = info.get("sector", "Unknown Sector")
+        industry = info.get("industry", "Unknown Industry")
+        
+        # Estimate Cost of Debt
+        interest_exp = abs(info.get("interestExpense", 0) or 0)
+        cost_of_debt = (interest_exp / total_debt) if total_debt > 0 else 0.05
+        
+        # Tax rate (default 21% if not derivable)
+        tax_rate = 0.21
+        
+        # 2. Compute WACC
+        risk_free_rate = 0.042  # ~4.2% assumed 10Y Treasury
+        erp = 0.055            # 5.5% assumed ERP
+        
+        capm_res = calc_capm(risk_free_rate, beta, erp)
+        wacc_res = calc_wacc(
+            market_cap, total_debt, capm_res["cost_of_equity"], cost_of_debt, tax_rate
+        )
+        
+        # 3. Compute Baseline DCF
+        # Generate a naive 5-year FCF projection growing at 8% fading to terminal 2.5%
+        wacc_val = wacc_res.get("wacc", 0.10)
+        if wacc_val <= 0.025:
+            wacc_val = 0.08 # Fallback WACC if math failed
+            
+        terminal_g = 0.025
+        dcf_res = None
+        if fcf > 0:
+            proj_fcfs = [
+                fcf * (1.08 ** 1),
+                fcf * (1.08 ** 2),
+                fcf * (1.08 ** 3) * 0.95,
+                fcf * (1.08 ** 4) * 0.90,
+                fcf * (1.08 ** 5) * 0.85, 
+            ]
+            dcf_res = calc_dcf(proj_fcfs, terminal_g, wacc_val, net_debt, shares_out)
+        
+        # 4. Assemble Peer Multiples
+        pe = info.get("trailingPE", "-")
+        fwd_pe = info.get("forwardPE", "-")
+        ps = info.get("priceToSalesTrailing12Months", "-")
+        ev_ebitda = round((market_cap + net_debt) / ebitda, 1) if ebitda > 0 else "-"
+        pb = info.get("priceToBook", "-")
+        
+        # 5. Build Markdown Report
+        lines = [
+            f"# Automatic Valuation & Metrics Report: {ticker.upper()}",
+            "---",
+            "## 1. Company Profile & Core Metrics",
+            f"- **Sector**: {sector} | **Industry**: {industry}",
+            f"- Market Cap: ${market_cap:,.0f}",
+            f"- Total Debt: ${total_debt:,.0f} | Net Debt: ${net_debt:,.0f}",
+            f"- Shares Outstanding: {shares_out:,.0f}",
+            f"- TTM Revenue: ${revenue:,.0f}",
+            f"- TTM EBITDA: ${ebitda:,.0f}",
+            f"- TTM Free Cash Flow: ${fcf:,.0f}",
+            f"- Trailing EPS: ${eps}",
+            f"- Beta: {beta}",
+            "",
+            "## 2. Prevailing Trading Multiples (Target)",
+            f"- P/E (TTM): {pe}",
+            f"- P/E (Forward): {fwd_pe}",
+            f"- EV/EBITDA: {ev_ebitda}",
+            f"- P/S: {ps}",
+            f"- P/B: {pb}",
+            "",
+            "## 3. WACC Calculation (Baseline)",
+            f"- Risk-Free Rate: {risk_free_rate:.2%} | Market Premium: {erp:.2%}",
+            f"- Cost of Equity (CAPM): {capm_res['cost_of_equity']:.2%}",
+            f"- Cost of Debt (Pre-Tax): {cost_of_debt:.2%} | Tax Rate: {tax_rate:.0%}",
+            f"- Equity Weight: {wacc_res.get('equity_weight', 0):.1%} | Debt Weight: {wacc_res.get('debt_weight', 0):.1%}",
+            f"- **Calculated WACC: {wacc_res.get('wacc', 0):.2%}**",
+            "",
+            "## 4. DCF Valuation (Baseline 5-Yr Projection)",
+        ]
+        
+        if dcf_res and not dcf_res.get("error"):
+            lines.extend([
+                f"- Terminal Growth Rate Assumed: {terminal_g:.2%}",
+                f"- **Enterprise Value: ${dcf_res['enterprise_value']:,.0f}**",
+                f"- **Equity Value: ${dcf_res['equity_value']:,.0f}**",
+                f"- **Intrinsic Value Per Share: ${dcf_res['per_share_value']:.2f}**",
+                "",
+                "### DCF Sensitivity Analysis (Per-Share Value)",
+            ])
+            matrix = dcf_res.get("sensitivity_matrix", [])
+            if matrix:
+                growth_keys = [k for k in matrix[0] if k != "wacc"]
+                lines.append("| WACC | " + " | ".join(growth_keys) + " |")
+                lines.append("|------|" + "|".join(["------"] * len(growth_keys)) + "|")
+                for row in matrix:
+                    wacc_str = f"{row['wacc']:.2%}"
+                    vals = [f"${row[gk]:,.2f}" if isinstance(row[gk], (int, float)) else str(row[gk]) for gk in growth_keys]
+                    lines.append(f"| {wacc_str} | " + " | ".join(vals) + " |")
+        else:
+            reason = dcf_res.get("error") if dcf_res else "Negative FCF or missing data"
+            lines.append(f"*DCF Baseline skipped*: {reason}")
+            
+        lines.append("")
+        lines.append("*(Note to Analyst: Base your Phase 3 Valuation Modeling on these precise numbers to avoid calculation errors. You may qualitatively adjust the WACC or Per-Share targets in your final report based on your Phase 1 business assessment.)*")
+        
+        return "\n".join(lines)
+        
+    except Exception as e:
+        return f"ERROR computing structural valuation for {ticker}: {str(e)}"

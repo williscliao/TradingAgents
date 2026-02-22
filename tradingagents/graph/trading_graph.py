@@ -35,9 +35,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_quant_grades,
 )
 from tradingagents.agents.utils.valuation_calc_tools import (
-    calculate_wacc,
-    calculate_dcf,
-    calculate_relative_valuation,
+    get_full_valuation_metrics,
 )
 
 from .conditional_logic import ConditionalLogic
@@ -213,15 +211,9 @@ class TradingAgentsGraph:
             "valuation": ToolNode(
                 [
                     # Valuation analysis tools (financial data + market data + calc tools)
-                    get_fundamentals,
-                    get_balance_sheet,
-                    get_cashflow,
-                    get_income_statement,
                     get_stock_data,
                     get_indicators,
-                    calculate_wacc,
-                    calculate_dcf,
-                    calculate_relative_valuation,
+                    get_full_valuation_metrics,
                 ]
             ),
         }
